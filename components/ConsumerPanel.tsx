@@ -13,7 +13,6 @@ interface KafkaMessage {
 export default function ConsumerPanel() {
   const [topic, setTopic] = useState("demo-topic");
   const [groupId, setGroupId] = useState("tutorial-consumer-group");
-  const [fromBeginning, setFromBeginning] = useState(true);
   const [maxMessages, setMaxMessages] = useState(20);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,7 +29,7 @@ export default function ConsumerPanel() {
       const res = await fetch("/api/consume", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ topic, groupId, fromBeginning, maxMessages }),
+        body: JSON.stringify({ topic, groupId, maxMessages }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
@@ -95,6 +94,34 @@ export default function ConsumerPanel() {
         </div>
       </div>
 
+      {/* How offsets work */}
+      <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
+        <h3 className="text-md font-semibold text-white mb-2">📍 How Offsets Work</h3>
+        <p className="text-gray-400 text-sm leading-relaxed mb-3">
+          Kafka tracks the last-read position for each consumer group in a special internal topic called{" "}
+          <code className="text-purple-400 font-mono text-xs">__consumer_offsets</code>. Once a group
+          has committed an offset, it will always resume from that position — even if you pass{" "}
+          <code className="text-gray-300 font-mono text-xs">fromBeginning: true</code> in code.
+        </p>
+        <div className="grid grid-cols-2 gap-3 text-xs">
+          <div className="bg-gray-800 rounded-lg p-3">
+            <div className="text-green-400 font-medium mb-1">New Group ID</div>
+            <div className="text-gray-400">
+              No committed offsets → reads from the beginning of the topic (all existing messages).
+            </div>
+          </div>
+          <div className="bg-gray-800 rounded-lg p-3">
+            <div className="text-yellow-400 font-medium mb-1">Existing Group ID</div>
+            <div className="text-gray-400">
+              Committed offsets exist → resumes from where it left off (only new messages since last read).
+            </div>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-gray-500">
+          💡 To re-read all messages, use a <strong className="text-gray-400">different Group ID</strong> — that group has no committed offsets yet.
+        </p>
+      </div>
+
       {/* Consume Form */}
       <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
         <h3 className="text-md font-semibold text-white mb-4">Consume Messages</h3>
@@ -111,7 +138,10 @@ export default function ConsumerPanel() {
               />
             </div>
             <div className="flex-1">
-              <label className="block text-xs text-gray-400 mb-1">Consumer Group ID</label>
+              <label className="block text-xs text-gray-400 mb-1">
+                Consumer Group ID{" "}
+                <span className="text-gray-600">(use a new ID to read from the beginning)</span>
+              </label>
               <input
                 type="text"
                 value={groupId}
@@ -121,17 +151,7 @@ export default function ConsumerPanel() {
               />
             </div>
           </div>
-          <div className="flex gap-6 items-center">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="checkbox"
-                checked={fromBeginning}
-                onChange={(e) => setFromBeginning(e.target.checked)}
-                className="w-4 h-4 accent-purple-500"
-              />
-              <span className="text-sm text-gray-300">From beginning</span>
-              <span className="text-xs text-gray-500">(uncheck to read only new messages)</span>
-            </label>
+          <div className="flex items-center gap-4">
             <div className="flex items-center gap-2">
               <label className="text-xs text-gray-400">Max messages:</label>
               <input
@@ -151,14 +171,14 @@ export default function ConsumerPanel() {
           >
             {loading ? (
               <span className="flex items-center gap-2">
-                <span className="animate-spin inline-block">⟳</span> Consuming (up to 3s)...
+                <span className="animate-spin inline-block">⟳</span> Consuming (up to 4s)...
               </span>
             ) : (
               "Consume Messages"
             )}
           </button>
           <p className="text-xs text-gray-500">
-            💡 The consumer will wait up to 3 seconds for messages. Change the Group ID to re-read from the beginning.
+            💡 The consumer waits up to 4 seconds for messages. Change the Group ID to read from the beginning again.
           </p>
         </div>
       </div>
@@ -187,7 +207,10 @@ export default function ConsumerPanel() {
           {messages.length === 0 ? (
             <div className="text-center py-8 text-gray-500">
               <div className="text-4xl mb-2">📭</div>
-              <p className="text-sm">No messages found. Try producing some messages first!</p>
+              <p className="text-sm">No new messages for this group.</p>
+              <p className="text-xs mt-1 text-gray-600">
+                This group has already read all messages. Use a different Group ID to start fresh.
+              </p>
             </div>
           ) : (
             <div className="space-y-4">
