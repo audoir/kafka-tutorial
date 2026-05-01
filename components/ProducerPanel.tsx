@@ -2,10 +2,13 @@
 
 import { useState } from "react";
 
-interface SendResult {
+interface SentRecord {
   partition: number;
   offset: string;
   timestamp: string;
+  key: string | null;
+  value: string;
+  sentAt: string; // local time string
 }
 
 export default function ProducerPanel() {
@@ -14,11 +17,16 @@ export default function ProducerPanel() {
   const [messageValue, setMessageValue] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [results, setResults] = useState<SendResult[]>([]);
-  const [log, setLog] = useState<string[]>([]);
+  const [records, setRecords] = useState<SentRecord[]>([]);
 
-  const addLog = (msg: string) => {
-    setLog((prev) => [`[${new Date().toLocaleTimeString()}] ${msg}`, ...prev].slice(0, 50));
+  const formatTimestamp = (ts: string) => {
+    try {
+      const n = Number(ts);
+      if (n > 0) return new Date(n).toLocaleString();
+    } catch {
+      // fall through
+    }
+    return ts;
   };
 
   const sendMessage = async () => {
@@ -26,43 +34,36 @@ export default function ProducerPanel() {
     setLoading(true);
     setError(null);
 
-    const payload = {
-      topic: topic.trim(),
-      messages: [
-        {
-          key: messageKey.trim() || undefined,
-          value: messageValue.trim(),
-        },
-      ],
-    };
-
-    addLog(`Sending to topic "${topic}"${messageKey ? ` with key="${messageKey}"` : " (no key, round-robin)"}...`);
+    const key = messageKey.trim() || null;
+    const value = messageValue.trim();
 
     try {
       const res = await fetch("/api/produce", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({
+          topic: topic.trim(),
+          messages: [{ key: key ?? undefined, value }],
+        }),
       });
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      const newResults: SendResult[] = data.result.map(
+      const sentAt = new Date().toLocaleTimeString();
+      const newRecords: SentRecord[] = data.result.map(
         (r: { partition: number; baseOffset: string; logAppendTime: string }) => ({
           partition: r.partition,
           offset: r.baseOffset,
           timestamp: r.logAppendTime,
+          key,
+          value,
+          sentAt,
         })
       );
-      setResults((prev) => [...newResults, ...prev].slice(0, 20));
-      addLog(
-        `✅ Message delivered → Partition ${newResults[0]?.partition}, Offset ${newResults[0]?.offset}`
-      );
+      setRecords((prev) => [...newRecords, ...prev].slice(0, 50));
       setMessageValue("");
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      addLog(`❌ Error: ${msg}`);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
@@ -81,8 +82,6 @@ export default function ProducerPanel() {
       { key: "truck-2", value: JSON.stringify({ truckId: "truck-2", lat: 34.0525, lng: -118.2440, speed: 70 }) },
     ];
 
-    addLog(`Sending batch of ${batchMessages.length} messages to "${topic}" with keys...`);
-
     try {
       const res = await fetch("/api/produce", {
         method: "POST",
@@ -92,23 +91,39 @@ export default function ProducerPanel() {
       const data = await res.json();
       if (data.error) throw new Error(data.error);
 
-      const newResults: SendResult[] = data.result.map(
-        (r: { partition: number; baseOffset: string; logAppendTime: string }) => ({
+      const sentAt = new Date().toLocaleTimeString();
+      const newRecords: SentRecord[] = data.result.map(
+        (r: { partition: number; baseOffset: string; logAppendTime: string }, i: number) => ({
           partition: r.partition,
           offset: r.baseOffset,
           timestamp: r.logAppendTime,
+          key: batchMessages[i]?.key ?? null,
+          value: batchMessages[i]?.value ?? "",
+          sentAt,
         })
       );
-      setResults((prev) => [...newResults, ...prev].slice(0, 20));
-      addLog(`✅ Batch delivered to ${newResults.length} partition(s). Same key → same partition!`);
+      setRecords((prev) => [...newRecords, ...prev].slice(0, 50));
     } catch (e: unknown) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setError(msg);
-      addLog(`❌ Error: ${msg}`);
+      setError(e instanceof Error ? e.message : String(e));
     } finally {
       setLoading(false);
     }
   };
+
+  const partitionColors: Record<number, string> = {};
+  const palette = [
+    "text-blue-400",
+    "text-purple-400",
+    "text-teal-400",
+    "text-orange-400",
+    "text-pink-400",
+    "text-cyan-400",
+  ];
+  records.forEach((r) => {
+    if (!(r.partition in partitionColors)) {
+      partitionColors[r.partition] = palette[r.partition % palette.length];
+    }
+  });
 
   return (
     <div className="space-y-6">
@@ -147,19 +162,17 @@ export default function ProducerPanel() {
               className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500"
             />
           </div>
-          <div className="flex gap-3">
-            <div className="flex-1">
-              <label className="block text-xs text-gray-400 mb-1">
-                Key <span className="text-gray-600">(optional — leave blank for round-robin)</span>
-              </label>
-              <input
-                type="text"
-                value={messageKey}
-                onChange={(e) => setMessageKey(e.target.value)}
-                placeholder="e.g. truck-1"
-                className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500"
-              />
-            </div>
+          <div>
+            <label className="block text-xs text-gray-400 mb-1">
+              Key <span className="text-gray-600">(optional — leave blank for round-robin)</span>
+            </label>
+            <input
+              type="text"
+              value={messageKey}
+              onChange={(e) => setMessageKey(e.target.value)}
+              placeholder="e.g. truck-1"
+              className="w-full bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-sm text-white placeholder-gray-500 focus:outline-none focus:border-green-500"
+            />
           </div>
           <div>
             <label className="block text-xs text-gray-400 mb-1">Value</label>
@@ -186,6 +199,14 @@ export default function ProducerPanel() {
             >
               Send Demo Batch (truck GPS)
             </button>
+            {records.length > 0 && (
+              <button
+                onClick={() => setRecords([])}
+                className="ml-auto px-3 py-2 text-xs text-gray-500 hover:text-gray-300 transition-colors"
+              >
+                Clear
+              </button>
+            )}
           </div>
         </div>
       </div>
@@ -196,37 +217,64 @@ export default function ProducerPanel() {
         </div>
       )}
 
-      {/* Results */}
-      {results.length > 0 && (
+      {/* Sent Records Table */}
+      {records.length > 0 && (
         <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <h3 className="text-md font-semibold text-white mb-3">Delivery Receipts</h3>
-          <div className="space-y-2">
-            {results.map((r, i) => (
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="text-md font-semibold text-white">
+              Sent Records{" "}
+              <span className="text-gray-500 text-sm font-normal">({records.length})</span>
+            </h3>
+            <span className="text-xs text-gray-500">newest first</span>
+          </div>
+
+          {/* Column headers */}
+          <div className="grid grid-cols-[auto_auto_auto_auto_1fr] gap-x-4 px-3 py-1 text-xs text-gray-500 font-medium border-b border-gray-800 mb-1">
+            <span>Partition</span>
+            <span>Offset</span>
+            <span>Key</span>
+            <span>Sent At</span>
+            <span>Value</span>
+          </div>
+
+          <div className="space-y-1 max-h-96 overflow-y-auto">
+            {records.map((r, i) => (
               <div
                 key={i}
-                className="bg-gray-800 border border-gray-700 rounded-lg px-3 py-2 text-xs font-mono flex gap-4"
+                className="grid grid-cols-[auto_auto_auto_auto_1fr] gap-x-4 items-start px-3 py-2 rounded-lg bg-gray-800 hover:bg-gray-750 text-xs font-mono"
               >
-                <span className="text-green-400">✓</span>
-                <span className="text-gray-400">
-                  Partition: <span className="text-blue-300">{r.partition}</span>
+                {/* Partition */}
+                <span className={`font-bold ${partitionColors[r.partition] ?? "text-blue-400"}`}>
+                  P{r.partition}
                 </span>
-                <span className="text-gray-400">
-                  Offset: <span className="text-yellow-300">{r.offset}</span>
+
+                {/* Offset */}
+                <span className="text-yellow-300">{r.offset}</span>
+
+                {/* Key */}
+                <span className={r.key ? "text-green-400" : "text-gray-600 italic"}>
+                  {r.key ?? "null"}
+                </span>
+
+                {/* Sent At */}
+                <span className="text-gray-500 whitespace-nowrap">{r.sentAt}</span>
+
+                {/* Value */}
+                <span className="text-gray-300 truncate" title={r.value}>
+                  {r.value}
                 </span>
               </div>
             ))}
           </div>
-        </div>
-      )}
 
-      {/* Activity Log */}
-      {log.length > 0 && (
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5">
-          <h3 className="text-md font-semibold text-white mb-3">Activity Log</h3>
-          <div className="bg-gray-950 rounded-lg p-3 font-mono text-xs space-y-1 max-h-48 overflow-y-auto">
-            {log.map((entry, i) => (
-              <div key={i} className={entry.includes("❌") ? "text-red-400" : entry.includes("✅") ? "text-green-400" : "text-gray-400"}>
-                {entry}
+          {/* Partition legend */}
+          <div className="mt-3 pt-3 border-t border-gray-800 flex flex-wrap gap-3">
+            {Object.entries(partitionColors).sort(([a], [b]) => Number(a) - Number(b)).map(([p, color]) => (
+              <div key={p} className="flex items-center gap-1 text-xs">
+                <span className={`font-bold ${color}`}>P{p}</span>
+                <span className="text-gray-600">
+                  — {records.filter((r) => r.partition === Number(p)).length} msg(s)
+                </span>
               </div>
             ))}
           </div>
